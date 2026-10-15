@@ -84,3 +84,53 @@ class Order(models.Model):
 
     def __str__(self):
         return f"{self.get_kind_display()} for {self.customer} on {self.service_date}"
+
+
+class RoutePlan(models.Model):
+    """One solver run for one service day."""
+
+    class Solver(models.TextChoices):
+        ORTOOLS = "ortools", "OR-tools"
+        GREEDY = "greedy", "Greedy dispatch"
+
+    service_date = models.DateField(db_index=True)
+    solver = models.CharField(max_length=10, choices=Solver.choices)
+    orders_total = models.PositiveIntegerField()
+    orders_assigned = models.PositiveIntegerField()
+    total_distance_m = models.PositiveIntegerField()
+    solve_ms = models.PositiveIntegerField()
+    unassigned_orders = models.ManyToManyField(Order, related_name="+", blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"{self.get_solver_display()} plan for {self.service_date}"
+
+
+class Route(models.Model):
+    plan = models.ForeignKey(RoutePlan, on_delete=models.CASCADE, related_name="routes")
+    driver = models.ForeignKey(Driver, on_delete=models.CASCADE, related_name="routes")
+    start_time = models.TimeField()
+    end_time = models.TimeField()
+    distance_m = models.PositiveIntegerField()
+    start_load_bags = models.PositiveSmallIntegerField()
+    max_load_bags = models.PositiveSmallIntegerField()
+    path = models.LineStringField(srid=4326)  # depot, each stop in order, depot
+
+    class Meta:
+        ordering = ["driver_id"]
+        constraints = [models.UniqueConstraint(fields=["plan", "driver"], name="one_route_per_driver_per_plan")]
+
+
+class RouteStop(models.Model):
+    route = models.ForeignKey(Route, on_delete=models.CASCADE, related_name="stops")
+    order = models.ForeignKey(Order, on_delete=models.CASCADE, related_name="route_stops")
+    sequence = models.PositiveSmallIntegerField()
+    arrival = models.TimeField()
+    load_after_bags = models.PositiveSmallIntegerField()
+
+    class Meta:
+        ordering = ["sequence"]
+        constraints = [models.UniqueConstraint(fields=["route", "sequence"], name="unique_stop_sequence")]

@@ -1,16 +1,18 @@
 from datetime import date
 
-from django.db.models import Count
+from django.db.models import Count, Prefetch
 from rest_framework import viewsets
 from rest_framework.exceptions import ValidationError
 from rest_framework_gis.pagination import GeoJsonPagination
 
-from .models import Customer, Depot, Driver, Order, Zone
+from .models import Customer, Depot, Driver, Order, Route, RoutePlan, RouteStop, Zone
 from .serializers import (
     CustomerSerializer,
     DepotSerializer,
     DriverSerializer,
     OrderSerializer,
+    RoutePlanDetailSerializer,
+    RoutePlanSummarySerializer,
     ZoneSerializer,
 )
 
@@ -77,3 +79,20 @@ class OrderViewSet(viewsets.ReadOnlyModelViewSet):
         if "zone" in params:
             queryset = queryset.filter(customer__zone__name=params["zone"])
         return queryset
+
+
+class RoutePlanViewSet(viewsets.ReadOnlyModelViewSet):
+    """Saved solver runs. The list is a summary; a single plan includes every route as GeoJSON."""
+
+    def get_queryset(self):
+        queryset = RoutePlan.objects.annotate(drivers_used=Count("routes"))
+        if "date" in self.request.query_params:
+            queryset = queryset.filter(service_date=parse_date(self.request.query_params["date"], "date"))
+        if self.action == "retrieve":
+            stops = RouteStop.objects.select_related("order", "order__customer")
+            routes = Route.objects.select_related("driver").prefetch_related(Prefetch("stops", queryset=stops))
+            queryset = queryset.prefetch_related(Prefetch("routes", queryset=routes), "unassigned_orders")
+        return queryset.order_by("-created_at")
+
+    def get_serializer_class(self):
+        return RoutePlanDetailSerializer if self.action == "retrieve" else RoutePlanSummarySerializer
