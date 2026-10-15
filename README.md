@@ -6,13 +6,14 @@ The project is built in stages:
 
 1. **Backend and data (done):** Django + PostGIS models, a seeded generator for realistic order history, and a GeoJSON API.
 2. **Route optimization (done):** a capacitated vehicle routing solver with time windows and mixed pickups and deliveries (Google OR-tools), compared against a greedy dispatch baseline.
-3. **Map frontend:** React + TypeScript map of zones, orders, and each driver's route.
+3. **Map frontend (done):** React + TypeScript map of zones, routes, and stops, with a side-by-side comparison of both solvers.
 4. **Forecasting and MCP:** next-week pickup volume per zone, and an MCP server so Claude can plan routes and answer operations questions.
 
 ## Stack
 
 - Python 3.12, Django 5.2, Django REST Framework, djangorestframework-gis
 - Google OR-tools 9.15
+- React 19, TypeScript 7, Vite 8, Leaflet (react-leaflet), Vitest
 - PostgreSQL 16 + PostGIS 3.4
 - Docker Compose
 
@@ -24,13 +25,17 @@ Requires Docker Desktop.
 docker compose up --build
 ```
 
-In a second terminal, load the sample data:
+In a second terminal, load the sample data and plan a week of routes:
 
 ```bash
 docker compose exec web python manage.py generate_data
 ```
 
-Then open http://localhost:8000/api/.
+```bash
+docker compose exec web python manage.py plan_routes --days 7
+```
+
+Then open the map at http://localhost:5173, or the API at http://localhost:8000/api/.
 
 To use the Django admin, create a user with `docker compose exec web python manage.py createsuperuser` and go to http://localhost:8000/admin/.
 
@@ -60,7 +65,7 @@ Plan today's pending orders with both solvers and compare them:
 docker compose exec web python manage.py plan_routes
 ```
 
-Options: `--date YYYY-MM-DD`, `--solver ortools|greedy|both`, and `--time-limit` (OR-tools search seconds, default 5).
+Options: `--date YYYY-MM-DD`, `--days N` (plan N consecutive days), `--solver ortools|greedy|both`, and `--time-limit` (OR-tools search seconds, default 5).
 
 **The problem.** Each driver leaves the depot loaded with every delivery bag on their route, drops bags at deliveries, and picks bags up at pickups. Every stop has a two-hour window, every driver has a shift and a bag capacity, and the van has to stay under capacity the whole way, so the order of stops matters, not just the total. Distances use a Manhattan (street grid) approximation because Phoenix roads mostly run north-south and east-west, at an average 40 km/h plus 5 minutes per stop.
 
@@ -83,6 +88,17 @@ Options: `--date YYYY-MM-DD`, `--solver ortools|greedy|both`, and `--time-limit`
 | Tue | 75 | 75 served, 753 km | 75 served, 1,002 km | 24.9% |
 | **Week** | **458** | **458 served, 4,843 km** | **457 served, 6,696 km** | **27.7%** |
 
+## Map
+
+The map at http://localhost:5173 shows one service day at a time:
+
+- Pick a day and switch between the OR-tools and greedy dispatch plans. Both load together, so switching is instant, and the summary shows how much less driving OR-tools needs.
+- Each driver keeps the same color in both plans. Filled dots are pickups, hollow dots are deliveries, gray dashed dots are orders no route could fit, and the black dot is the depot.
+- Click a driver (or any of their stops) to highlight the route and list its stops with arrival times, time windows, and bags on board.
+- Route lines are drawn as east-west then north-south legs, matching the street-grid distance the planner optimizes. They aren't turn-by-turn roads.
+
+Basemap tiles come from the OpenStreetMap tile servers, which are fine for development and demos. A public deployment with real traffic should use a commercial tile provider.
+
 ## API
 
 All endpoints are read-only. Map data is returned as GeoJSON.
@@ -95,14 +111,21 @@ All endpoints are read-only. Map data is returned as GeoJSON.
 | `GET /api/drivers/` | Drivers, capacities, and shifts |
 | `GET /api/orders/?date=2026-10-15&status=pending&kind=pickup&zone=B2` | Orders at each customer's location |
 | `GET /api/route-plans/?date=2026-10-15` | Saved plans with totals and drivers used |
+| `GET /api/service-days/` | Days with pending orders and the newest plan ID from each solver |
 | `GET /api/route-plans/<id>/` | One plan: each route as a GeoJSON line with its ordered stops, arrival times, and load after each stop |
 
 Paginated endpoints accept `?page_size=` up to 2000.
 
 ## Tests
 
-The tests need PostGIS, so run them in the container:
+The backend tests need PostGIS, so run them in the container:
 
 ```bash
 docker compose run --rm web python manage.py test
+```
+
+Frontend type check and unit tests:
+
+```bash
+docker compose run --rm --no-deps frontend sh -c "npm run typecheck && npm test"
 ```

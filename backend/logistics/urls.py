@@ -1,3 +1,4 @@
+from django.urls import path
 from rest_framework.routers import DefaultRouter
 
 from . import views
@@ -10,4 +11,7 @@ router.register("drivers", views.DriverViewSet, basename="driver")
 router.register("orders", views.OrderViewSet, basename="order")
 router.register("route-plans", views.RoutePlanViewSet, basename="route-plan")
 
-urlpatterns = router.urls
+urlpatterns = [
+    path("service-days/", views.ServiceDaysView.as_view(), name="service-days"),
+    *router.urls,
+]

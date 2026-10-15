@@ -73,6 +73,15 @@ class PlanRoutesTests(TestCase):
         self.assertIn("less driving", out.getvalue())
         self.assertEqual(RoutePlan.objects.count(), 2)
 
+    def test_command_plans_consecutive_days(self):
+        call_command(
+            "plan_routes", "--date", END.isoformat(), "--days", "2", "--solver", "greedy", stdout=StringIO()
+        )
+
+        self.assertEqual(
+            sorted(RoutePlan.objects.values_list("service_date", flat=True)), [END, SERVICE_DAY]
+        )
+
 
 class RoutePlanApiTests(APITestCase):
     @classmethod
@@ -87,6 +96,17 @@ class RoutePlanApiTests(APITestCase):
         self.assertEqual([plan["id"] for plan in matching], [self.plan.id])
         self.assertEqual(matching[0]["drivers_used"], self.plan.routes.count())
         self.assertEqual(other, [])
+
+    def test_service_days_list_pending_counts_and_newest_plans(self):
+        newer = plan_routes(SERVICE_DAY, RoutePlan.Solver.ORTOOLS, time_limit_s=1)
+        greedy = plan_routes(SERVICE_DAY, RoutePlan.Solver.GREEDY)
+
+        days = self.client.get("/api/service-days/").json()
+
+        self.assertEqual([day["date"] for day in days], [SERVICE_DAY.isoformat()])
+        pending = Order.objects.filter(service_date=SERVICE_DAY, status=Order.Status.PENDING).count()
+        self.assertEqual(days[0]["pending_orders"], pending)
+        self.assertEqual(days[0]["plans"], {"ortools": newer.id, "greedy": greedy.id})
 
     def test_detail_returns_routes_as_geojson_with_ordered_stops(self):
         body = self.client.get(f"/api/route-plans/{self.plan.id}/").json()

@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, timedelta
 
 from django.core.management.base import BaseCommand
 from django.utils import timezone
@@ -19,24 +19,29 @@ class Command(BaseCommand):
             help="Which solver to run.",
         )
         parser.add_argument("--time-limit", type=float, default=5.0, help="OR-tools search time in seconds.")
+        parser.add_argument("--days", type=int, default=1, help="Plan this many consecutive days starting at --date.")
 
     def handle(self, *args, **options):
-        service_date = options["date"] or timezone.localdate()
+        first_day = options["date"] or timezone.localdate()
         solvers = RoutePlan.Solver.values if options["solver"] == "both" else [options["solver"]]
 
-        plans = {}
-        for solver in solvers:
-            plan = plan_routes(service_date, solver, time_limit_s=options["time_limit"])
-            plans[solver] = plan
-            km = plan.total_distance_m / 1000
-            per_order = km / plan.orders_assigned if plan.orders_assigned else 0
-            self.stdout.write(
-                f"{plan.get_solver_display():<15} plan #{plan.pk}: {plan.orders_assigned}/{plan.orders_total} orders, "
-                f"{plan.routes.count()} drivers, {km:.1f} km ({per_order:.2f} km per order), {plan.solve_ms} ms"
-            )
-
-        if len(plans) == 2:
-            self.stdout.write(self.style.SUCCESS(compare(plans[RoutePlan.Solver.ORTOOLS], plans[RoutePlan.Solver.GREEDY])))
+        for offset in range(options["days"]):
+            service_date = first_day + timedelta(days=offset)
+            if options["days"] > 1:
+                self.stdout.write(f"\n{service_date:%a %Y-%m-%d}")
+            plans = {}
+            for solver in solvers:
+                plan = plan_routes(service_date, solver, time_limit_s=options["time_limit"])
+                plans[solver] = plan
+                km = plan.total_distance_m / 1000
+                per_order = km / plan.orders_assigned if plan.orders_assigned else 0
+                self.stdout.write(
+                    f"{plan.get_solver_display():<15} plan #{plan.pk}: {plan.orders_assigned}/{plan.orders_total} orders, "
+                    f"{plan.routes.count()} drivers, {km:.1f} km ({per_order:.2f} km per order), {plan.solve_ms} ms"
+                )
+            if len(plans) == 2:
+                optimized, baseline = plans[RoutePlan.Solver.ORTOOLS], plans[RoutePlan.Solver.GREEDY]
+                self.stdout.write(self.style.SUCCESS(compare(optimized, baseline)))
 
 
 def compare(optimized: RoutePlan, baseline: RoutePlan) -> str:

@@ -3,6 +3,8 @@ from datetime import date
 from django.db.models import Count, Prefetch
 from rest_framework import viewsets
 from rest_framework.exceptions import ValidationError
+from rest_framework.response import Response
+from rest_framework.views import APIView
 from rest_framework_gis.pagination import GeoJsonPagination
 
 from .models import Customer, Depot, Driver, Order, Route, RoutePlan, RouteStop, Zone
@@ -96,3 +98,33 @@ class RoutePlanViewSet(viewsets.ReadOnlyModelViewSet):
 
     def get_serializer_class(self):
         return RoutePlanDetailSerializer if self.action == "retrieve" else RoutePlanSummarySerializer
+
+
+class ServiceDaysView(APIView):
+    """Days with pending orders, and the newest saved plan from each solver for that day."""
+
+    def get(self, request):
+        latest_plans = {}
+        for plan in RoutePlan.objects.order_by("created_at", "id").values("id", "service_date", "solver"):
+            latest_plans[plan["service_date"], plan["solver"]] = plan["id"]
+
+        days = (
+            Order.objects.filter(status=Order.Status.PENDING)
+            .values("service_date")
+            .annotate(pending_orders=Count("id"))
+            .order_by("service_date")
+        )
+        return Response(
+            [
+                {
+                    "date": day["service_date"],
+                    "pending_orders": day["pending_orders"],
+                    "plans": {
+                        solver: latest_plans[day["service_date"], solver]
+                        for solver in RoutePlan.Solver.values
+                        if (day["service_date"], solver) in latest_plans
+                    },
+                }
+                for day in days
+            ]
+        )
