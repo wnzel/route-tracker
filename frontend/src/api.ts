@@ -31,6 +31,8 @@ export interface RouteProperties {
   driver: number;
   driver_name: string;
   capacity_bags: number;
+  shift_start: string;
+  shift_end: string;
   start_time: string;
   end_time: string;
   distance_m: number;
@@ -74,6 +76,41 @@ export interface OrderProperties {
 export type OrderFeature = Feature<Point, OrderProperties>;
 export type Orders = FeatureCollection<Point, OrderProperties> & { count: number };
 
+export interface ForecastDay {
+  date: string;
+  forecast: number;
+  booked: number;
+}
+
+export interface ZoneForecast {
+  zone: string;
+  total_forecast: number;
+  daily: ForecastDay[];
+}
+
+export interface ForecastScore {
+  zone_day_wape: number | null;
+  city_day_wape: number | null;
+}
+
+export interface Backtest {
+  method: string;
+  test_start: string;
+  test_end: string;
+  scores: { model: ForecastScore; last_week: ForecastScore; four_week_avg: ForecastScore };
+  noise_floor: ForecastScore;
+}
+
+export interface Forecast {
+  start: string;
+  days: number;
+  history_end: string;
+  weekday_index: Record<string, number>;
+  city: ForecastDay[];
+  zones: ZoneForecast[];
+  backtest: Backtest | null;
+}
+
 async function getJson<T>(path: string, signal?: AbortSignal): Promise<T> {
   const response = await fetch(path, { signal, headers: { Accept: "application/json" } });
   if (!response.ok) {
@@ -89,4 +126,5 @@ export const api = {
   plan: (id: number, signal?: AbortSignal) => getJson<RoutePlan>(`/api/route-plans/${id}/`, signal),
   pendingOrders: (date: string, signal?: AbortSignal) =>
     getJson<Orders>(`/api/orders/?date=${date}&status=pending&page_size=2000`, signal),
+  forecast: (signal?: AbortSignal) => getJson<Forecast>("/api/forecast/?days=7", signal),
 };

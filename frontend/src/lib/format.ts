@@ -3,16 +3,29 @@ export function km(meters: number): string {
   return `${value} km`;
 }
 
+/** Minutes after midnight for an "HH:MM:SS" time. */
+export function minutes(time: string): number {
+  const [hours, mins] = time.split(":").map(Number);
+  return hours * 60 + mins;
+}
+
 /** "13:07:00" -> "1:07 PM" */
 export function clock(time: string): string {
-  const [hours, minutes] = time.split(":").map(Number);
+  const [hours, mins] = time.split(":").map(Number);
   const suffix = hours >= 12 ? "PM" : "AM";
   const hour12 = hours % 12 === 0 ? 12 : hours % 12;
-  return `${hour12}:${String(minutes).padStart(2, "0")} ${suffix}`;
+  return `${hour12}:${String(mins).padStart(2, "0")} ${suffix}`;
+}
+
+/** 13 -> "1 PM" for axis ticks. */
+export function hourLabel(hour: number): string {
+  const suffix = hour >= 12 && hour < 24 ? "PM" : "AM";
+  const hour12 = hour % 12 === 0 ? 12 : hour % 12;
+  return `${hour12} ${suffix}`;
 }
 
 export function timeWindow(start: string, end: string): string {
-  return `${clock(start)} – ${clock(end)}`;
+  return `${clock(start)} to ${clock(end)}`;
 }
 
 /** "2026-10-14" -> "Wed, Oct 14". Parsed at noon so no time zone can shift the day. */
@@ -22,6 +35,12 @@ export function dayLabel(isoDate: string): string {
     month: "short",
     day: "numeric",
   });
+}
+
+/** "2026-10-14" -> "Wed 14" for compact chart axes. */
+export function shortDayLabel(isoDate: string): string {
+  const day = new Date(`${isoDate}T12:00:00`);
+  return `${day.toLocaleDateString("en-US", { weekday: "short" })} ${day.getDate()}`;
 }
 
 export function duration(ms: number): string {
@@ -51,4 +70,8 @@ export function drivingSaved(plan: PlanTotals, baseline: PlanTotals): number | n
 
 export function percent(fraction: number): string {
   return `${(fraction * 100).toFixed(1)}%`;
+}
+
+export function plural(count: number, word: string): string {
+  return `${count} ${word}${count === 1 ? "" : "s"}`;
 }

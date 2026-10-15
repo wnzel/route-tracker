@@ -7,12 +7,13 @@ The project is built in stages:
 1. **Backend and data (done):** Django + PostGIS models, a seeded generator for realistic order history, and a GeoJSON API.
 2. **Route optimization (done):** a capacitated vehicle routing solver with time windows and mixed pickups and deliveries (Google OR-tools), compared against a greedy dispatch baseline.
 3. **Map frontend (done):** React + TypeScript map of zones, routes, and stops, with a side-by-side comparison of both solvers.
-4. **Forecasting and MCP:** next-week pickup volume per zone, and an MCP server so Claude can plan routes and answer operations questions.
+4. **Forecasting and MCP (done):** next week's order volume per zone, backtested against baselines, and an MCP server so Claude can plan routes and answer operations questions.
 
 ## Stack
 
 - Python 3.12, Django 5.2, Django REST Framework, djangorestframework-gis
 - Google OR-tools 9.15
+- MCP Python SDK 2.3 (stdio and Streamable HTTP)
 - React 19, TypeScript 7, Vite 8, Leaflet (react-leaflet), Vitest
 - PostgreSQL 16 + PostGIS 3.4
 - Docker Compose
@@ -35,7 +36,7 @@ docker compose exec web python manage.py generate_data
 docker compose exec web python manage.py plan_routes --days 7
 ```
 
-Then open the map at http://localhost:5173, or the API at http://localhost:8000/api/.
+Then open the app at http://localhost:5173, or the API at http://localhost:8000/api/. The MCP server runs at http://localhost:8001/mcp.
 
 To use the Django admin, create a user with `docker compose exec web python manage.py createsuperuser` and go to http://localhost:8000/admin/.
 
@@ -88,16 +89,84 @@ Options: `--date YYYY-MM-DD`, `--days N` (plan N consecutive days), `--solver or
 | Tue | 75 | 75 served, 753 km | 75 served, 1,002 km | 24.9% |
 | **Week** | **458** | **458 served, 4,843 km** | **457 served, 6,696 km** | **27.7%** |
 
-## Map
+## The app
 
-The map at http://localhost:5173 shows one service day at a time:
+http://localhost:5173 has two views. The day, view, and solver are kept in the URL, so a link opens the same screen.
 
-- Pick a day and switch between the OR-tools and greedy dispatch plans. Both load together, so switching is instant, and the summary shows how much less driving OR-tools needs.
-- Each driver keeps the same color in both plans. Filled dots are pickups, hollow dots are deliveries, gray dashed dots are orders no route could fit, and the black dot is the depot.
-- Click a driver (or any of their stops) to highlight the route and list its stops with arrival times, time windows, and bags on board.
-- Route lines are drawn as east-west then north-south legs, matching the street-grid distance the planner optimizes. They aren't turn-by-turn roads.
+**Routes** shows one service day:
+
+- The summary leads with how much less driving OR-tools needs than greedy dispatch, then the plan's totals.
+- The map draws every route. Filled dots are pickups, hollow dots are deliveries, gray dashed dots are orders no route could fit, and the black dot is the depot. Route lines run east-west then north-south, matching the street-grid distance the planner optimizes; they aren't turn-by-turn roads.
+- The dispatch board puts each driver's day on a 7 AM to 7 PM timeline: the gray bar is the shift, the colored line is time on the road, and each dot is a stop at its arrival time. Hover a row to pick out that route on the map, or select it to list every stop with arrival time, window, and bags on board.
+- Each driver keeps one color in both plans.
+
+**Next week** shows the forecast: expected orders per day next to orders already booked, zones shaded by expected volume on the selected day, a per-zone table, and the backtest results.
 
 Basemap tiles come from the OpenStreetMap tile servers, which are fine for development and demos. A public deployment with real traffic should use a commercial tile provider.
+
+**Design.** The interface is built for a dispatcher scanning a day, not as a marketing page. One type family (Atkinson Hyperlegible Next, chosen for unambiguous numerals in times and distances), a cool concrete-gray page, and one accent: dry-cleaning-tag yellow for whatever is selected. The data carries the color. Route colors come from a categorical palette checked for colorblind separation against the gray basemap; because some hues are light, every route is also labeled by driver name on the board rather than identified by color alone. The forecast map uses a single-hue ramp validated so its lightest class still shows against white.
+
+## Forecasting
+
+```bash
+docker compose exec web python manage.py forecast_volume
+```
+
+The forecast is top-down: one weekly pattern and trend for the whole city, split across zones by each zone's share of orders. A zone only sees a handful of orders a day, so a first version that fit a trend per zone mostly chased noise and lost to a simple four-week average; the city total is large enough for the weekly shape and trend to be clear.
+
+It's scored with a rolling-origin backtest: for each of the last eight weeks, fit on everything before that week, forecast it, and measure WAPE (total absolute error divided by total orders). Results on the default sample data:
+
+| Method | City error per day | Zone error per day |
+|---|---|---|
+| **Top-down model** | **10.3%** | **36.0%** |
+| Four-week same-day average | 11.4% | 39.1% |
+| Same day last week | 15.7% | 48.2% |
+| Noise floor (a perfect model) | 10.0% | 33.6% |
+
+The noise floor is the error left over even when the forecast is exactly right, because daily orders are random around their expected value (the sample data is Poisson). At 10.3% against a 10.0% floor, the city forecast has learned nearly everything the data offers. With less than about twelve weeks of history the forecast still runs and the backtest is skipped.
+
+## MCP server
+
+The MCP server lets Claude (or any MCP client) work with the planner directly. It follows Anthropic's `mcp-builder` guidance: tools are prefixed `route_tracker_`, inputs are validated with Pydantic, results are structured JSON, every tool is annotated read-only or not, and errors say what to call next.
+
+| Tool | What it does |
+|---|---|
+| `route_tracker_list_service_days` | Days with pending orders and their newest plans. The starting point. |
+| `route_tracker_get_plan` | A saved plan's totals, every driver's route summary, and unassigned orders |
+| `route_tracker_get_route` | One driver's stops in order, by name or ID |
+| `route_tracker_compare_solvers` | OR-tools against greedy dispatch for a day |
+| `route_tracker_forecast_volume` | Daily forecasts city-wide or for one zone, with the backtest |
+| `route_tracker_find_order` | An order's details and which driver serves it |
+| `route_tracker_plan_routes` | Plans a day and saves it (the one tool that writes) |
+
+**Local (stdio)** for Claude Code:
+
+```bash
+claude mcp add route-tracker -- docker compose -f "/path/to/route-tracker/docker-compose.yml" exec -T web python manage.py mcp_server
+```
+
+or Claude Desktop's `claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "route-tracker": {
+      "command": "docker",
+      "args": ["compose", "-f", "/path/to/route-tracker/docker-compose.yml", "exec", "-T", "web", "python", "manage.py", "mcp_server"]
+    }
+  }
+}
+```
+
+**Remote (Streamable HTTP).** `docker compose up` also starts the server on http://localhost:8001/mcp, bound to this machine only. It's stateless with JSON responses, so it scales like any other HTTP service, and every request needs a bearer token (`MCP_TOKEN`, `local-dev-token` by default; set your own in `.env`):
+
+```bash
+claude mcp add --transport http route-tracker http://localhost:8001/mcp --header "Authorization: Bearer local-dev-token"
+```
+
+A single shared token suits a personal or team deployment. For per-user access, swap the middleware for the SDK's OAuth support.
+
+Questions it handles well: "Which driver has the longest route on Monday?", "How much driving does OR-tools save this week?", "Who is delivering order 412, and when?", "How many orders should zone B3 expect on Friday?"
 
 ## API
 
@@ -112,6 +181,7 @@ All endpoints are read-only. Map data is returned as GeoJSON.
 | `GET /api/orders/?date=2026-10-15&status=pending&kind=pickup&zone=B2` | Orders at each customer's location |
 | `GET /api/route-plans/?date=2026-10-15` | Saved plans with totals and drivers used |
 | `GET /api/service-days/` | Days with pending orders and the newest plan ID from each solver |
+| `GET /api/forecast/?days=7&start=2026-10-15` | Daily forecasts city-wide and per zone, booked counts, and the backtest |
 | `GET /api/route-plans/<id>/` | One plan: each route as a GeoJSON line with its ordered stops, arrival times, and load after each stop |
 
 Paginated endpoints accept `?page_size=` up to 2000.

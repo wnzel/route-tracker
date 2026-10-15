@@ -4,3 +4,4 @@ djangorestframework-gis>=1.1,<2.0
 psycopg[binary]>=3.2,<4.0
 gunicorn>=23.0,<24.0
 ortools>=9.12,<10.0
+mcp>=2.3,<3.0

@@ -87,6 +87,8 @@ class RouteStopSerializer(serializers.ModelSerializer):
 class RouteSerializer(GeoFeatureModelSerializer):
     driver_name = serializers.CharField(source="driver.name", read_only=True)
     capacity_bags = serializers.IntegerField(source="driver.capacity_bags", read_only=True)
+    shift_start = serializers.TimeField(source="driver.shift_start", read_only=True)
+    shift_end = serializers.TimeField(source="driver.shift_end", read_only=True)
     stops = RouteStopSerializer(many=True, read_only=True)
 
     class Meta:
@@ -97,6 +99,8 @@ class RouteSerializer(GeoFeatureModelSerializer):
             "driver",
             "driver_name",
             "capacity_bags",
+            "shift_start",
+            "shift_end",
             "start_time",
             "end_time",
             "distance_m",

@@ -8,6 +8,7 @@ from rest_framework.views import APIView
 from rest_framework_gis.pagination import GeoJsonPagination
 
 from .models import Customer, Depot, Driver, Order, Route, RoutePlan, RouteStop, Zone
+from .services import forecasting
 from .serializers import (
     CustomerSerializer,
     DepotSerializer,
@@ -98,6 +99,24 @@ class RoutePlanViewSet(viewsets.ReadOnlyModelViewSet):
 
     def get_serializer_class(self):
         return RoutePlanDetailSerializer if self.action == "retrieve" else RoutePlanSummarySerializer
+
+
+class ForecastView(APIView):
+    """Daily order forecasts per zone for the days after history ends, with a backtest."""
+
+    def get(self, request):
+        params = request.query_params
+        start = parse_date(params["start"], "start") if "start" in params else None
+        try:
+            days = int(params.get("days", 7))
+        except ValueError:
+            raise ValidationError({"days": "Use a whole number of days."})
+        if not 1 <= days <= 28:
+            raise ValidationError({"days": "Forecast between 1 and 28 days."})
+        try:
+            return Response(forecasting.forecast(start, days))
+        except ValueError as error:
+            raise ValidationError({"detail": str(error)})
 
 
 class ServiceDaysView(APIView):

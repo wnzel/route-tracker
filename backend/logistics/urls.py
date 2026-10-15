@@ -13,5 +13,6 @@ router.register("route-plans", views.RoutePlanViewSet, basename="route-plan")
 
 urlpatterns = [
     path("service-days/", views.ServiceDaysView.as_view(), name="service-days"),
+    path("forecast/", views.ForecastView.as_view(), name="forecast"),
     *router.urls,
 ]

@@ -3,7 +3,7 @@ import { useEffect, useMemo } from "react";
 import { CircleMarker, MapContainer, Polygon, Polyline, Popup, TileLayer, Tooltip, useMap } from "react-leaflet";
 
 import type { Depots, OrderFeature, RouteFeature, Zones } from "../api";
-import { DEPOT_COLOR, UNASSIGNED_COLOR } from "../lib/colors";
+import { DEPOT_COLOR, FORECAST_RAMP, labelInk, rampClass, UNASSIGNED_COLOR } from "../lib/colors";
 import { clock, timeWindow } from "../lib/format";
 import { gridPath, toLatLng } from "../lib/geometry";
 
@@ -15,26 +15,34 @@ interface Props {
   routes: RouteFeature[];
   colors: Map<number, string>;
   unassigned: OrderFeature[];
+  /** Selected or hovered route; the others fade. */
+  emphasized: number | null;
   selected: number | null;
   onSelect: (routeId: number | null) => void;
+  /** When set, zones are shaded by expected orders and routes are hidden. */
+  zoneForecast: Map<string, number> | null;
 }
+
+const prefersReducedMotion = () => window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
 function FitBounds({ points }: { points: LatLngTuple[] }) {
   const map = useMap();
   useEffect(() => {
     if (points.length > 1) {
-      map.fitBounds(latLngBounds(points), { padding: [32, 32], maxZoom: 14 });
+      map.fitBounds(latLngBounds(points), { padding: [28, 28], maxZoom: 14, animate: !prefersReducedMotion() });
     }
   }, [map, points]);
   return null;
 }
 
-export function RouteMap({ zones, depots, routes, colors, unassigned, selected, onSelect }: Props) {
+export function RouteMap({ zones, depots, routes, colors, unassigned, emphasized, selected, onSelect, zoneForecast }: Props) {
+  const showRoutes = zoneForecast === null;
   const focus = useMemo(() => {
-    const shown = selected === null ? routes : routes.filter((route) => route.id === selected);
+    const shown = !showRoutes ? [] : selected === null ? routes : routes.filter((route) => route.id === selected);
     const points = shown.flatMap((route) => route.geometry.coordinates.map(toLatLng));
     return points.length ? points : (zones?.features.flatMap((zone) => zone.geometry.coordinates[0].map(toLatLng)) ?? []);
-  }, [routes, selected, zones]);
+  }, [routes, selected, zones, showRoutes]);
+  const forecastMax = zoneForecast ? Math.max(...zoneForecast.values()) : 0;
 
   return (
     <div className="map-wrap">
@@ -47,90 +55,104 @@ export function RouteMap({ zones, depots, routes, colors, unassigned, selected, 
         />
         <FitBounds points={focus} />
 
-        {zones?.features.map((zone) => (
-          <Polygon
-            key={zone.properties.name}
-            positions={zone.geometry.coordinates[0].map(toLatLng)}
-            pathOptions={{ color: "#94a3b8", weight: 1, dashArray: "4 4", fillOpacity: 0.02 }}
-            interactive={false}
-          >
-            <Tooltip permanent direction="center" className="zone-label">
-              {zone.properties.name}
-            </Tooltip>
-          </Polygon>
-        ))}
-
-        {routes.map((route) => {
-          const id = Number(route.id);
-          const color = colors.get(route.properties.driver) ?? "#2563eb";
-          const dimmed = selected !== null && selected !== id;
+        {zones?.features.map((zone) => {
+          const expected = zoneForecast?.get(zone.properties.name);
+          const shade = expected === undefined ? null : rampClass(expected, forecastMax);
           return (
-            <Polyline
-              key={`line-${id}`}
-              positions={gridPath(route.geometry.coordinates)}
-              pathOptions={{ color, weight: selected === id ? 5 : 3, opacity: dimmed ? 0.15 : 0.85 }}
-              eventHandlers={{ click: () => onSelect(selected === id ? null : id) }}
-            />
+            <Polygon
+              key={`${zone.properties.name}-${shade ?? "outline"}`}
+              positions={zone.geometry.coordinates[0].map(toLatLng)}
+              pathOptions={
+                shade === null
+                  ? { color: "#8b94a1", weight: 1, fillOpacity: 0 }
+                  : { color: "#ffffff", weight: 2, fillColor: FORECAST_RAMP[shade], fillOpacity: 0.82 }
+              }
+              interactive={false}
+            >
+              <Tooltip permanent direction="center" className="zone-label">
+                <span style={shade === null ? undefined : { color: labelInk(shade) }}>
+                  {zone.properties.name}
+                  {expected !== undefined && <b>{expected.toFixed(1)}</b>}
+                </span>
+              </Tooltip>
+            </Polygon>
           );
         })}
 
-        {routes.map((route) => {
-          const id = Number(route.id);
-          const color = colors.get(route.properties.driver) ?? "#2563eb";
-          const dimmed = selected !== null && selected !== id;
-          return route.properties.stops.map((stop, i) => (
+        {showRoutes &&
+          routes.map((route) => {
+            const id = Number(route.id);
+            const color = colors.get(route.properties.driver);
+            const faded = emphasized !== null && emphasized !== id;
+            return (
+              <Polyline
+                key={`line-${id}`}
+                positions={gridPath(route.geometry.coordinates)}
+                pathOptions={{ color, weight: emphasized === id ? 4 : 2.5, opacity: faded ? 0.12 : 0.9 }}
+                eventHandlers={{ click: () => onSelect(selected === id ? null : id) }}
+              />
+            );
+          })}
+
+        {showRoutes &&
+          routes.map((route) => {
+            const id = Number(route.id);
+            const color = colors.get(route.properties.driver);
+            const faded = emphasized !== null && emphasized !== id;
+            return route.properties.stops.map((stop, i) => (
+              <CircleMarker
+                key={`stop-${stop.order}`}
+                center={toLatLng(route.geometry.coordinates[i + 1])}
+                radius={5}
+                pathOptions={{
+                  color: stop.kind === "pickup" ? "#ffffff" : color,
+                  weight: 2,
+                  opacity: faded ? 0.25 : 1,
+                  fillColor: stop.kind === "pickup" ? color : "#ffffff",
+                  fillOpacity: faded ? 0.25 : 1,
+                }}
+                eventHandlers={{ click: () => onSelect(id) }}
+              >
+                <Popup>
+                  <p className="popup-title">{stop.customer_name}</p>
+                  <p>
+                    Stop {stop.sequence} for {route.properties.driver_name}, arrives {clock(stop.arrival)}
+                  </p>
+                  <p>
+                    {stop.kind === "pickup" ? "Pickup" : "Delivery"} of {stop.bags} bag{stop.bags === 1 ? "" : "s"}, window{" "}
+                    {timeWindow(stop.window_start, stop.window_end)}
+                  </p>
+                  <p>
+                    {stop.load_after_bags} of {route.properties.capacity_bags} bags on board after this stop
+                  </p>
+                </Popup>
+              </CircleMarker>
+            ));
+          })}
+
+        {showRoutes &&
+          unassigned.map((order) => (
             <CircleMarker
-              key={`stop-${stop.order}`}
-              center={toLatLng(route.geometry.coordinates[i + 1])}
-              radius={6}
-              pathOptions={{
-                color,
-                weight: 2,
-                opacity: dimmed ? 0.3 : 1,
-                fillColor: stop.kind === "pickup" ? color : "#ffffff",
-                fillOpacity: dimmed ? 0.3 : 1,
-              }}
-              eventHandlers={{ click: () => onSelect(id) }}
+              key={`unassigned-${order.id}`}
+              center={toLatLng(order.geometry.coordinates)}
+              radius={5}
+              pathOptions={{ color: UNASSIGNED_COLOR, weight: 2, dashArray: "2 2", fillColor: "#e5e7eb", fillOpacity: 1 }}
             >
               <Popup>
-                <strong>
-                  #{stop.sequence} · {stop.customer_name}
-                </strong>
-                <br />
-                {stop.kind === "pickup" ? "Pickup" : "Delivery"} · {stop.bags} bag{stop.bags === 1 ? "" : "s"}
-                <br />
-                Window {timeWindow(stop.window_start, stop.window_end)}
-                <br />
-                Arrives {clock(stop.arrival)} with {route.properties.driver_name}
-                <br />
-                {stop.load_after_bags} of {route.properties.capacity_bags} bags on board after
+                <p className="popup-title">{order.properties.customer_name}</p>
+                <p>
+                  Unassigned {order.properties.kind} of {order.properties.bags} bags, window{" "}
+                  {timeWindow(order.properties.window_start, order.properties.window_end)}
+                </p>
               </Popup>
             </CircleMarker>
-          ));
-        })}
-
-        {unassigned.map((order) => (
-          <CircleMarker
-            key={`unassigned-${order.id}`}
-            center={toLatLng(order.geometry.coordinates)}
-            radius={6}
-            pathOptions={{ color: UNASSIGNED_COLOR, weight: 2, dashArray: "2 2", fillColor: "#e5e7eb", fillOpacity: 1 }}
-          >
-            <Popup>
-              <strong>{order.properties.customer_name}</strong>
-              <br />
-              Unassigned {order.properties.kind} · {order.properties.bags} bags
-              <br />
-              Window {timeWindow(order.properties.window_start, order.properties.window_end)}
-            </Popup>
-          </CircleMarker>
-        ))}
+          ))}
 
         {depots?.features.map((depot) => (
           <CircleMarker
             key={`depot-${depot.id}`}
             center={toLatLng(depot.geometry.coordinates)}
-            radius={9}
+            radius={8}
             pathOptions={{ color: "#ffffff", weight: 3, fillColor: DEPOT_COLOR, fillOpacity: 1 }}
           >
             <Tooltip direction="top" offset={[0, -8]}>
@@ -140,21 +162,36 @@ export function RouteMap({ zones, depots, routes, colors, unassigned, selected, 
         ))}
       </MapContainer>
 
-      <div className="legend" aria-label="Map legend">
-        <span>
-          <i className="dot dot-pickup" /> Pickup
-        </span>
-        <span>
-          <i className="dot dot-delivery" /> Delivery
-        </span>
-        <span>
-          <i className="dot dot-unassigned" /> Unassigned
-        </span>
-        <span>
-          <i className="dot dot-depot" /> Depot
-        </span>
-        <small>Lines follow the street grid between stops, not exact roads.</small>
-      </div>
+      {showRoutes ? (
+        <div className="legend" aria-label="Map key">
+          <span>
+            <i className="dot dot-pickup" /> Pickup
+          </span>
+          <span>
+            <i className="dot dot-delivery" /> Delivery
+          </span>
+          <span>
+            <i className="dot dot-unassigned" /> Didn't fit
+          </span>
+          <span>
+            <i className="dot dot-depot" /> Depot
+          </span>
+          <small>Lines follow the street grid between stops, not exact roads.</small>
+        </div>
+      ) : (
+        <div className="legend" aria-label="Map key">
+          <span className="legend-title">Expected orders</span>
+          <span className="ramp" aria-hidden>
+            {FORECAST_RAMP.map((color) => (
+              <i key={color} style={{ background: color }} />
+            ))}
+          </span>
+          <span className="ramp-ends">
+            <span>0</span>
+            <span>{forecastMax.toFixed(0)}</span>
+          </span>
+        </div>
+      )}
     </div>
   );
 }

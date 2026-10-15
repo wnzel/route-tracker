@@ -1,3 +1,4 @@
+import "@fontsource-variable/atkinson-hyperlegible-next";
 import "leaflet/dist/leaflet.css";
 import "./styles.css";
 

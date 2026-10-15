@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { clock, dayLabel, drivingSaved, duration, km, percent, timeWindow } from "./format";
+import { clock, dayLabel, drivingSaved, duration, hourLabel, km, minutes, percent, plural, shortDayLabel, timeWindow } from "./format";
 
 describe("format", () => {
   it("formats meters as kilometers", () => {
@@ -13,7 +13,19 @@ describe("format", () => {
     expect(clock("12:30:00")).toBe("12:30 PM");
     expect(clock("13:07:00")).toBe("1:07 PM");
     expect(clock("00:05:00")).toBe("12:05 AM");
-    expect(timeWindow("11:00:00", "13:00:00")).toBe("11:00 AM – 1:00 PM");
+    expect(timeWindow("11:00:00", "13:00:00")).toBe("11:00 AM to 1:00 PM");
+  });
+
+  it("converts times to minutes and hour ticks", () => {
+    expect(minutes("13:07:00")).toBe(787);
+    expect(hourLabel(7)).toBe("7 AM");
+    expect(hourLabel(12)).toBe("12 PM");
+    expect(hourLabel(19)).toBe("7 PM");
+  });
+
+  it("pluralizes counts", () => {
+    expect(plural(1, "order")).toBe("1 order");
+    expect(plural(3, "order")).toBe("3 orders");
   });
 
   it("shows short solve times in milliseconds", () => {
@@ -23,6 +35,7 @@ describe("format", () => {
 
   it("labels a date without shifting the day", () => {
     expect(dayLabel("2026-10-14")).toBe("Wed, Oct 14");
+    expect(shortDayLabel("2026-10-19")).toBe("Mon 19");
   });
 
   it("compares total distance when both plans serve the same orders", () => {
